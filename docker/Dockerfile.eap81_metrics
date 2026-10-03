@@ -1,0 +1,76 @@
+# ==============================================================================
+# Dockerfile: JBoss EAP 8.1 on Red Hat Universal Base Image (UBI) 9.8
+# Description: 外部ポート(9990)を閉じたまま、ADOT連携(OTel Java Agent)および
+#              コンテナ内軽量メトリクス収集スクリプトを組み込んだ本番/テスト用Dockerfile例
+# ==============================================================================
+
+FROM registry.access.redhat.com/ubi9/ubi:9.8
+
+LABEL maintainer="Enterprise Platform Team" \
+      description="JBoss EAP 8.1 on UBI 9.8 with OpenTelemetry and JVM Metrics Support"
+
+# 1. 必要なJDKパッケージ・診断ツールのインストール
+# jstat, jcmd を含む java-17-openjdk-devel (または java-21-openjdk-devel), procps-ng, tar, gzip
+RUN dnf update -y && \
+    dnf install -y --nodocs \
+        java-17-openjdk-devel \
+        procps-ng \
+        findutils \
+        tar \
+        gzip \
+        shadow-utils \
+        curl && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf
+
+# 2. JBoss実行ユーザーの作成 (Red Hat標準 UID: 185)
+ENV JBOSS_USER=jboss \
+    JBOSS_UID=185 \
+    JBOSS_HOME=/opt/jboss/eap \
+    SCRIPTS_DIR=/opt/jboss/scripts \
+    OTEL_DIR=/opt/jboss/otel
+
+RUN groupadd -r jboss -g ${JBOSS_UID} && \
+    useradd -u ${JBOSS_UID} -r -g jboss -m -d /opt/jboss -s /sbin/nologin -c "JBoss user" jboss && \
+    mkdir -p ${JBOSS_HOME} ${SCRIPTS_DIR} ${OTEL_DIR} /var/log/jboss
+
+# 3. OpenTelemetry Java Agent の配置
+# 最新の安定版 opentelemetry-javaagent.jar を配置 (ビルド時に curl または COPY)
+# ADOT Collector へ OTLP (localhost:4317) で JVM メトリクス & トレースを自動送信します
+ARG OTEL_AGENT_VERSION="2.1.0"
+RUN curl -Lo ${OTEL_DIR}/opentelemetry-javaagent.jar \
+    https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v${OTEL_AGENT_VERSION}/opentelemetry-javaagent.jar && \
+    chmod 644 ${OTEL_DIR}/opentelemetry-javaagent.jar
+
+# 4. JBoss EAP 8.1 インストール資材のコピー（実環境に合わせて調整）
+# COPY --chown=jboss:jboss eap-8.1.0/ ${JBOSS_HOME}/
+
+# 5. スクリプト類の配置とパーミッション設定
+COPY --chown=jboss:jboss scripts/jvm_metrics_collector.sh ${SCRIPTS_DIR}/jvm_metrics_collector.sh
+COPY --chown=jboss:jboss scripts/entrypoint_wrapper.sh ${SCRIPTS_DIR}/entrypoint_wrapper.sh
+COPY --chown=jboss:jboss scripts/export_jfr_to_s3.sh ${SCRIPTS_DIR}/export_jfr_to_s3.sh
+
+RUN chmod +x ${SCRIPTS_DIR}/*.sh && \
+    chown -R jboss:jboss /opt/jboss /var/log/jboss
+
+# 6. 環境変数設定（Java, JBoss, OpenTelemetry）
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk \
+    PATH=$PATH:/usr/lib/jvm/java-17-openjdk/bin:${SCRIPTS_DIR} \
+    # OpenTelemetry メトリクス & トレース設定
+    OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317" \
+    OTEL_EXPORTER_OTLP_PROTOCOL="grpc" \
+    OTEL_METRICS_EXPORTER="otlp" \
+    OTEL_TRACES_EXPORTER="otlp" \
+    OTEL_LOGS_EXPORTER="none" \
+    OTEL_METRIC_EXPORT_INTERVAL="5000" \
+    # JBoss Modules と Java Agent の競合防止（重要）
+    JAVA_TOOL_OPTIONS="-javaagent:${OTEL_DIR}/opentelemetry-javaagent.jar -Djboss.modules.system.pkgs=io.opentelemetry,jdk.internal.perf,sun.misc"
+
+# 7. 公開ポート（業務ポート8080のみ。管理ポート9990はEXPOSEしない）
+EXPOSE 8080
+
+# 8. 実行ユーザーとエントリポイント
+USER 185
+WORKDIR ${JBOSS_HOME}
+
+ENTRYPOINT ["/opt/jboss/scripts/entrypoint_wrapper.sh"]

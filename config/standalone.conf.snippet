@@ -1,0 +1,49 @@
+# ==============================================================================
+# JBoss EAP 8.1 (Java 17/21) standalone.conf 設定スニペット
+# 配置場所: $JBOSS_HOME/bin/standalone.conf の末尾、または JAVA_OPTS 定義部分
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. 基本ヒープメモリ設定 (コンテナ割り当てメモリの 60〜75% を推奨)
+#    例: ECSタスクメモリが 4GB (4096MB) の場合、ヒープは 2560MB〜3072MB
+# ------------------------------------------------------------------------------
+JAVA_OPTS="$JAVA_OPTS -Xms2048m -Xmx2048m -XX:MetaspaceSize=256m -XX:MaxMetaspaceSize=512m"
+
+# ------------------------------------------------------------------------------
+# 2. ガベージコレクション (G1GC) 最適化
+# ------------------------------------------------------------------------------
+JAVA_OPTS="$JAVA_OPTS -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:InitiatingHeapOccupancyPercent=45"
+
+# ------------------------------------------------------------------------------
+# 3. 統一JVMガベージコレクションログ (JDK 17/21 形式)
+#    CloudWatch Logs に集約する場合:
+#    パターンA: 標準出力に出力（ECS awslogs で CloudWatch に直接送信）
+#    JAVA_OPTS="$JAVA_OPTS -Xlog:gc*,gc+phases=debug:stdout:time,uptime,pid"
+#
+#    パターンB: コンテナ内ローカルファイルに出力（ローテーション付き、安全確実）
+# ------------------------------------------------------------------------------
+JAVA_OPTS="$JAVA_OPTS -Xlog:gc*,gc+phases=debug:file=/var/log/jboss/gc-%t.log:time,uptime,pid,level,tags:filecount=5,filesize=50M"
+
+# ------------------------------------------------------------------------------
+# 4. メモリ枯渇 (OOM) 対策
+#    OOM発生時に速やかにヒープダンプを取得し、プロセスをフェイルファスト停止
+# ------------------------------------------------------------------------------
+JAVA_OPTS="$JAVA_OPTS -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/var/log/jboss/heapdump.hprof -XX:+ExitOnOutOfMemoryError"
+
+# ------------------------------------------------------------------------------
+# 5. JBoss EAP 8.1 (JBoss Modules) と OpenTelemetry Java Agent の競合防止
+#    JBossのクラスローダー分離を回避し、エージェントがコアクラスにアクセスできるようにする
+# ------------------------------------------------------------------------------
+JAVA_OPTS="$JAVA_OPTS -Djboss.modules.system.pkgs=org.jboss.byteman,io.opentelemetry,jdk.internal.perf,sun.misc"
+
+# ------------------------------------------------------------------------------
+# 6. コンテナ環境 (cgroup v2 / UBI 9.8) でのパフォーマンス最適化
+# ------------------------------------------------------------------------------
+JAVA_OPTS="$JAVA_OPTS -XX:+UseContainerSupport -XX:ActiveProcessorCount=2"
+
+# ------------------------------------------------------------------------------
+# 7. (オプション) Java Flight Recorder (JFR) を常時 継続記録（直近200MB/24時間を保持）
+# ------------------------------------------------------------------------------
+# JAVA_OPTS="$JAVA_OPTS -XX:StartFlightRecording=disk=true,dumponexit=true,filename=/var/log/jboss/continuous.jfr,maxsize=200M,maxage=24h,settings=profile"
+
+export JAVA_OPTS

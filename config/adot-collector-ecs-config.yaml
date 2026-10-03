@@ -1,0 +1,93 @@
+# ==============================================================================
+# ADOT (AWS Distro for OpenTelemetry) Collector Configuration
+# ECS サイドカーコンテナ用設定ファイル
+# 既存の X-Ray トレース収集に加え、Java アプリからの JVM メトリクスを
+# OTLP 経由で受信し、CloudWatch メトリクス (EMF) へ出力する設定
+# ==============================================================================
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # (既存の X-Ray レシーバーを利用している場合の互換設定)
+  awsxray:
+    endpoint: 0.0.0.0:2000
+    transport: udp
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 256
+    send_batch_max_size: 512
+
+  # ECS のタスクメタデータを自動付与（TaskARN, ContainerName等）
+  resourcedetection:
+    detectors: [ecs, env]
+    timeout: 2s
+    override: false
+
+  # JVM メトリクスにプレフィックスや共通ラベルを付加
+  metricstransform:
+    transforms:
+      - include: "jvm.*"
+        match_type: regexp
+        action: update
+        new_name: "jvm/{{metric}}"
+
+exporters:
+  # 1. 既存の X-Ray トレース用エクスポーター
+  awsxray:
+    region: ap-northeast-1
+
+  # 2. 【新規追加】JVM メトリクス用 CloudWatch EMF エクスポーター
+  #    CloudWatch Logs に構造化メトリクス(EMF)として書き込み、
+  #    CloudWatch Metrics (カスタムメトリクス) に自動プロットします。
+  awsemf:
+    region: ap-northeast-1
+    log_group_name: "/aws/ecs/application/jvm-metrics"
+    log_stream_name: "{TaskId}"
+    namespace: "ECS/JVM/JBossEAP"
+    dimension_rollup_option: "NoDimensionRollup"
+    metric_declarations:
+      # ヒープメモリ関連
+      - dimensions: [[ClusterName, TaskDefinitionFamily, type, area]]
+        metric_name_selectors:
+          - "jvm.memory.used"
+          - "jvm.memory.committed"
+          - "jvm.memory.max"
+      # GC 関連
+      - dimensions: [[ClusterName, TaskDefinitionFamily, gc]]
+        metric_name_selectors:
+          - "jvm.gc.duration"
+          - "jvm.gc.overhead"
+      # スレッド・CPU 関連
+      - dimensions: [[ClusterName, TaskDefinitionFamily, state]]
+        metric_name_selectors:
+          - "jvm.threads.count"
+          - "jvm.cpu.utilization"
+
+  # デバッグ用コンソール出力（必要に応じて有効化）
+  logging:
+    verbosity: basic
+
+service:
+  pipelines:
+    # 既存のトレースパイプライン
+    traces:
+      receivers: [otlp, awsxray]
+      processors: [batch, resourcedetection]
+      exporters: [awsxray]
+
+    # 【新規追加】メトリクスパイプライン
+    metrics:
+      receivers: [otlp]
+      processors: [batch, resourcedetection]
+      exporters: [awsemf]
+
+  telemetry:
+    logs:
+      level: info

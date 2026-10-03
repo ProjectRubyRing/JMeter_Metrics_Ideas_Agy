@@ -1,0 +1,75 @@
+{
+  "family": "jboss-eap8-frontend-backend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "2048",
+  "memory": "4096",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskRoleWithCloudWatchAndXRay",
+  "containerDefinitions": [
+    {
+      "name": "jboss-app",
+      "image": "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/jboss-eap8:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "OTEL_EXPORTER_OTLP_ENDPOINT",
+          "value": "http://localhost:4317"
+        },
+        {
+          "name": "OTEL_METRICS_EXPORTER",
+          "value": "otlp"
+        },
+        {
+          "name": "OTEL_TRACES_EXPORTER",
+          "value": "otlp"
+        },
+        {
+          "name": "OTEL_METRIC_EXPORT_INTERVAL",
+          "value": "5000"
+        },
+        {
+          "name": "ENABLE_METRICS_DAEMON",
+          "value": "true"
+        },
+        {
+          "name": "METRICS_INTERVAL",
+          "value": "5"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/jboss-app",
+          "awslogs-region": "ap-northeast-1",
+          "awslogs-stream-prefix": "app"
+        }
+      }
+    },
+    {
+      "name": "aws-otel-collector",
+      "image": "public.ecr.aws/aws-observability/aws-otel-collector:latest",
+      "essential": false,
+      "environment": [
+        {
+          "name": "AOT_CONFIG_CONTENT",
+          "value": "CONFIG_YAML_STRING_OR_LOAD_FROM_SSM"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/aws-otel-collector",
+          "awslogs-region": "ap-northeast-1",
+          "awslogs-stream-prefix": "otel"
+        }
+      }
+    }
+  ]
+}
